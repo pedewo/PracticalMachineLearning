@@ -1,0 +1,147 @@
+---
+title: "Practical Machine Learning: Predict ecexution of weight lifting excercises"
+author: "Peter De Wolf"
+date: "April 2, 2016"
+output: 
+  html_document:
+    fig_caption: yes
+---
+
+```{r global_options, include=FALSE}
+library(knitr)
+opts_chunk$set(fig.width=6, fig.height=3, warning=FALSE, message=FALSE)
+```
+
+# Executive Summary
+This data analysis is the assignment for the Practical Machine Learning course of the John Hopkins Data Science specialization track at Coursera.
+The project uses data from the Weight Lifting Exercises (WLE) Dataset (see reference 1).Six participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Sensors from devices such as Jawbone Up, Nike FuelBand, and Fitbit were used to collect data on the performed excercises.
+This data analysis will predict the manner in which the excercises were done by the participants. Formulated in another way, we are going to quantify how well the people were performing the excercise where most of the time people measure how much of an activity they do. 
+
+# Reproducibility
+To reproduce this data analysis the following R libraries and the following seed for the random number generator were used:
+```{r}
+library(lattice)
+library(ggplot2)
+library(caret)
+library(parallel)
+library(doParallel)
+set.seed(98765)
+
+```
+
+# Getting the data
+## The WLE dataset
+The data for this analysis is coming from the Human Data Recognition website (reference 3)
+The train2 data and the test data are made available by Coursera.
+The train2 dataset URL and the test dataset URL are:
+```{r}
+trainURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+train <- read.csv(url(trainURL), na.strings=c("NA","#DIV/0!",""))
+test  <- read.csv(url(testURL), na.strings=c("NA","#DIV/0!",""))
+```
+
+# Cleaning the data
+## Remove NAs and empty values
+In this project data from accelerometers on the belt, forearm, arm, and dumbell of  6 participants will be used.
+The dataset variables contain a lot of NAs and empty values. These values will be removed for the data analysis.
+
+```{r}
+# the datasets contain a lot of NA values, we will remove these values
+NAtrindex <- apply(train,2,function(x) {sum(is.na(x))}) 
+train <- train[,which(NAtrindex == 0)]
+NAteindex <- apply(test,2,function(x) {sum(is.na(x))}) 
+test <- test[,which(NAteindex == 0)]
+# Preprocessing
+val <- which(lapply(train, class) %in% "numeric")
+
+preObj <-preProcess(train[,val],method=c('knnImpute', 'center', 'scale'))
+train2 <- predict(preObj, train[,val])
+train2$classe <- train$classe
+test2 <-predict(preObj,test[,val])
+
+# remove variables with nearly zero variance
+nzv <- nearZeroVar(train2,saveMetrics=TRUE)
+train2 <- train2[,nzv$nzv==FALSE]
+nzv <- nearZeroVar(test2,saveMetrics=TRUE)
+test2 <- test2[,nzv$nzv==FALSE]
+dim(train);dim(test)
+dim(train2); dim(test2)
+```
+
+# Partitioning the train2 dataset and create cross validation dataset
+The train dataset will be split in a training dataset and a crossvalidation data set.
+```{r}
+intrain <- createDataPartition(y=train2$classe,
+                               p=0.6,
+                               list=FALSE)
+training <- train2[intrain, ]
+crossvalidation <- train2[-intrain, ]
+```
+
+# Prediction with random forest
+## Training
+```{r}
+# We use the random forest method and cross validation is used to control the training
+# Activate multicore processing
+Cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(Cluster)
+
+trainingcontrol <- trainControl(method="cv", number=3,verboseIter=F,allowParallel = TRUE)
+fit <- train(classe ~ ., data=training, method="rf", trControl=trainingcontrol,verbose=FALSE)
+
+# Stop multicore processing
+stopCluster(Cluster)
+
+plot(fit)
+```
+## Crossvalidation
+```{r}
+cvpredict <- predict(fit,crossvalidation)
+confusionMatrix(cvpredict,crossvalidation$classe)
+```
+## Prediction with test data
+```{r}
+testingpredict <- predict(fit,test2)
+testingpredict
+```
+#Prediction with Generalized Boosted Regression
+## Training
+```{r}
+# We use the random forest method and cross validation is used to control the training
+# Activate multicore processing
+Cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(Cluster)
+
+trainingcontrol <- trainControl(method="repeatedcv", number=5, repeats=1,verboseIter=F,allowParallel = TRUE)
+gbmfit <- train(classe ~ ., data=training, method="gbm", trControl=trainingcontrol,verbose=FALSE)
+
+# Stop multicore processing
+stopCluster(Cluster)
+
+plot(gbmfit)
+```
+## Crossvalidation
+```{r}
+cvgbmpredict <- predict(gbmfit,crossvalidation)
+confusionMatrix(cvgbmpredict,crossvalidation$classe)
+```
+## Prediction with test data
+```{r}
+testinggbmpredict <- predict(gbmfit,test2)
+testinggbmpredict
+```
+
+# Interpreting results / Excplain choices made
+The train and test data set have both 160 variables.
+We have to predict in what manner the 6 participants did the excercises.
+After the data cleaning 28 variables remain. 
+We have removed colums containing NAs and no values at all.
+The variables with Near Zero Variance were removed as well.
+The original training data set was split in a training data set and a cross validation data set.
+We have executed 2 model fits: a first one with the random forrest model and a second one with
+a Generalized Boosted Regression model. 
+The out of sample error for the Random Forrest model is the best one: 1 - 0,9885 = 0,015 or 1,15 %.
+The out of sample error for the GBM model is 0,0523.
+The Random Forrest model fit is the most accurate one.
+Remark: to speed up the interpretation of the R code the libraries parallel and doParallel were used.
